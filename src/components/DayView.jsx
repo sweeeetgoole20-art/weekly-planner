@@ -307,11 +307,10 @@ export default function DayView({ planner, date, onBack, onGoDay }) {
       const t = e.title?.trim()
       if (!t) continue
       const prev = seen.get(t)
-      const minutes =
-        e.max_duration_minutes ??
-        (e.actual_start && e.actual_end
-          ? Math.round((new Date(e.actual_end) - new Date(e.actual_start)) / 60000)
-          : null)
+      // 和「排入」用同一条链（区间 -> 计划长度 -> 实际长度），
+      // 不然自动补全给出来的时长和排进去的时长会是两个数。
+      // 兜底传 null：这里是「上次这件事多久」，不知道就该留空，不该编一个 60
+      const minutes = placementMinutes(e, null)
       if (!prev) seen.set(t, { title: t, count: 1, last: e.date, minutes, categoryId: e.category_id ?? null })
       else {
         prev.count += 1

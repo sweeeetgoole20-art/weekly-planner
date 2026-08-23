@@ -10,9 +10,32 @@ const STEP = 5
 
 const roundUp = (m) => Math.ceil(m / STEP) * STEP
 
-/** 一条待办排进时间轴时占多长：有区间就按上限，宁可留富余。 */
+/** 两个时刻之间几分钟；缺一个就返回 0。 */
+const spanMinutes = (from, to) =>
+  from && to ? Math.max(0, Math.round((new Date(to) - new Date(from)) / 60000)) : 0
+
+/**
+ * 一条待办排进时间轴时占多长。
+ *
+ * 按这个顺序问：
+ *   1. 填过时长区间吗 —— 填了就按上限，宁可留富余
+ *   2. 计划里排了多长 —— 模板写 07:00–07:30 生成出来就是半小时
+ *   3. 实际做了多长
+ *   4. 都没有，才用 60 分钟兜底
+ *
+ * 第 2 条是补上的。以前只看区间，而模板只填起止时间、不填区间是很常见的
+ * 写法（「洗澡 07:00–07:30」），生成的条目 min/max 都是 null ——
+ * 于是计划里明明是 30 分钟，长按加进去却变成 60 分钟。
+ * 计划的长度本来就是「这件事要多久」最直接的答案，不该跳过它去用兜底值。
+ */
 export function placementMinutes(entry, fallback = 60) {
-  return entry.max_duration_minutes ?? entry.min_duration_minutes ?? fallback
+  const range = entry.max_duration_minutes ?? entry.min_duration_minutes
+  if (range != null) return range
+  return (
+    spanMinutes(entry.planned_start, entry.planned_end) ||
+    spanMinutes(entry.actual_start, entry.actual_end) ||
+    fallback
+  )
 }
 
 /**
@@ -130,8 +153,11 @@ export function capacityOf(dayEntries, todos, { anchor = DEFAULT_ANCHOR, nowMin 
       !(t.actual_start && t.actual_end) &&
       (t.completion_pct ?? 0) < 100,
   )
+  // 下限用同一条链，只是区间取下限 —— 两处各写一份迟早会走岔
   const min = pending.reduce(
-    (sum, t) => sum + (t.min_duration_minutes ?? t.max_duration_minutes ?? 60),
+    (sum, t) =>
+      sum +
+      (t.min_duration_minutes ?? t.max_duration_minutes ?? placementMinutes(t)),
     0,
   )
   const max = pending.reduce((sum, t) => sum + placementMinutes(t), 0)

@@ -68,30 +68,39 @@ export default function Planner({ repo, onSignOut }) {
   /** history.back() 没退成时的兜底，见下面 */
   const backTimer = useRef(null)
 
+  /** 这一次加载有没有搭过历史栈。第一次必须无条件搭，见下面。 */
+  const built = useRef(false)
+
   useEffect(() => {
     const deep = view.name !== 'week'
-    const st = window.history.state
-    // idx 是我们自己盖的章：0 = 底层那条，1 = 上层那条。
-    // 光看 pv 的名字判断不了「底下到底还有没有东西」——
-    // 刷新之后浏览器会把 state 原样恢复，于是一条孤零零的历史也可能
-    // 写着 pv:day，照着它走就不补底，返回手势还是直接退出。
-    const idx = typeof st?.idx === 'number' ? st.idx : null
-    // 只有一条历史却盖着「上层」的章：底下其实是空的，得重新垫
-    const orphan = idx !== null && idx > 0 && window.history.length <= 1
 
-    if (idx === null || orphan) {
+    if (!built.current) {
+      built.current = true
+      /**
+       * 每次加载都**无条件**把底垫一遍，不去判断「底下是不是已经有一条了」。
+       *
+       * 判断不出来。history.length 把进 app 之前的条目也算进去，
+       * 而刷新之后浏览器会把 state 原样恢复 —— 一条孤零零的历史照样写着
+       * pv:day。之前两版都栽在这上面：推测「底下有」，于是不补，
+       * 返回手势还是一下退出。
+       *
+       * 代价是刷新之后周视图那一层可能多出一条：在周视图上要按两次返回
+       * 才退出 app。这个方向的错犯得起 —— 反过来（少垫一条）就是
+       * 正编辑着一天，手一滑整个 app 没了。
+       */
       window.history.replaceState({ pv: { name: 'week' }, idx: 0 }, '')
       if (deep) window.history.pushState({ pv: packView(view), idx: 1 }, '')
       return
     }
+
     if (!deep) return
-    if (idx === 0) {
-      // 从底层进上层：压一条，返回手势于是有一条可退的
-      window.history.pushState({ pv: packView(view), idx: 1 }, '')
-    } else {
+    const idx = window.history.state?.idx
+    if (idx === 1) {
       // 上层之间换一页（日视图翻天、日视图 -> 设置）。这里要是也 push，
       // 翻几天历史里就堆一摞，得按好几次返回才出得去
-      window.history.replaceState({ pv: packView(view), idx }, '')
+      window.history.replaceState({ pv: packView(view), idx: 1 }, '')
+    } else {
+      window.history.pushState({ pv: packView(view), idx: 1 }, '')
     }
   }, [view])
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { usePlanner } from '../state/usePlanner'
 import WeekView from './WeekView'
 import DayView from './DayView'
@@ -38,9 +38,67 @@ function initialView() {
   return { name: 'week' }
 }
 
+/** 历史状态里只放得下能序列化的东西，Date 换成 '2026-08-19' 这种字符串。 */
+const packView = (v) =>
+  v.name === 'day' ? { name: 'day', date: dateKey(v.date) } : { name: v.name }
+
+const unpackView = (v) =>
+  v?.name === 'day' && v.date ? { name: 'day', date: fromDateKey(v.date) } : { name: v?.name ?? 'week' }
+
 export default function Planner({ repo, onSignOut }) {
   const planner = usePlanner(repo)
-  const [view, setView] = useState(initialView)
+  const [view, setViewState] = useState(initialView)
+
+  /**
+   * 安卓的返回手势（屏幕边缘左滑）走的是浏览器历史。
+   *
+   * 这个 app 从来没往历史里压过东西，于是在日视图上左滑一下**直接退出**，
+   * 而人的预期是先回到周视图、再滑一次才走。装成 PWA 之后尤其别扭 ——
+   * 看起来像个 app，返回键却不像 app。
+   *
+   * 只分两层，够用而且不容易乱：
+   *   周视图 = 底层；日视图 / 设置 / 帮助 / 统计 = 上面那一层。
+   *
+   *   进上层     -> pushState，返回手势于是有一条可退的
+   *   上层之间换 -> replaceState，不然日视图翻几天历史里就堆了一摞，
+   *                 要按好几次返回才出得去
+   *   回周视图   -> 不自己 setView，交给 history.back()，
+   *                 由 popstate 统一改状态。两条路各改一次的话，
+   *                 历史指针和界面迟早对不上
+   */
+  const viewRef = useRef(view)
+  viewRef.current = view
+
+  const setView = useCallback((next) => {
+    const wasDeep = viewRef.current.name !== 'week'
+    const deep = next.name !== 'week'
+    if (!deep) {
+      // 已经在上层：让历史往回走一格，界面由 popstate 改
+      if (wasDeep) {
+        window.history.back()
+        return
+      }
+    } else if (wasDeep) {
+      window.history.replaceState({ pv: packView(next) }, '')
+    } else {
+      window.history.pushState({ pv: packView(next) }, '')
+    }
+    setViewState(next)
+  }, [])
+
+  useEffect(() => {
+    // 启动时如果直接落在上层（记住了上次的位置），历史里得垫一条周视图，
+    // 不然返回手势第一下就退出了
+    const first = viewRef.current
+    window.history.replaceState({ pv: { name: 'week' } }, '')
+    if (first.name !== 'week') {
+      window.history.pushState({ pv: packView(first) }, '')
+    }
+
+    const onPop = (e) => setViewState(unpackView(e.state?.pv))
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
 
   useEffect(() => {
     try {
@@ -81,7 +139,7 @@ export default function Planner({ repo, onSignOut }) {
   useEffect(() => {
     if (view.name !== 'day') return
     if (planner.days.some((d) => dateKey(d) === dateKey(view.date))) return
-    setView({ name: 'day', date: new Date() })
+    setView({ name: 'day', date: new Date() })  // 同一层，setView 里会走 replaceState
     // days 每次渲染都是新数组，用 monday 作为真实依赖
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [planner.monday, view])

@@ -8,11 +8,52 @@ import Stats from './Stats'
 import { LANGS, tr } from '../lib/i18n'
 import { useLang } from '../state/LangContext'
 import { getHints, setHints, subscribeHints } from '../lib/prefs'
-import { dateKey } from '../lib/dates'
+import { dateKey, fromDateKey, weekStart } from '../lib/dates'
+
+const VIEW_KEY = 'weekly-planner:view'
+
+/**
+ * 上次停在哪一页，下次打开还回到那儿。
+ *
+ * 这个 app 一天要开好几次，几乎每次都是直接奔当天那一页去的。
+ * 每次都从周视图起步，等于每次都多点一下。
+ *
+ * 两条限制：
+ *   - **只记周视图和日视图。** 设置 / 帮助 / 统计是「去一趟就回来」的地方，
+ *     下次打开落在设置页很怪。
+ *   - 存的那一天**不在本周就回到今天**。planner 默认装的就是本周，跨周还得
+ *     连带把周也挪过去；而隔了一天再打开，想看的本来就是今天，不是昨天。
+ */
+function initialView() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(VIEW_KEY) || 'null')
+    if (saved?.name === 'day' && saved.date) {
+      const day = fromDateKey(saved.date)
+      const sameWeek = dateKey(weekStart(day)) === dateKey(weekStart(new Date()))
+      return { name: 'day', date: sameWeek ? day : new Date() }
+    }
+  } catch {
+    // 存坏了、或者隐私模式下读不了，就当没存过
+  }
+  return { name: 'week' }
+}
 
 export default function Planner({ repo, onSignOut }) {
   const planner = usePlanner(repo)
-  const [view, setView] = useState({ name: 'week' })
+  const [view, setView] = useState(initialView)
+
+  useEffect(() => {
+    try {
+      if (view.name === 'week') {
+        localStorage.setItem(VIEW_KEY, JSON.stringify({ name: 'week' }))
+      } else if (view.name === 'day') {
+        localStorage.setItem(VIEW_KEY, JSON.stringify({ name: 'day', date: dateKey(view.date) }))
+      }
+      // 别的页不记，见 initialView
+    } catch {
+      // 存不下就只是这次不记，不影响使用
+    }
+  }, [view])
 
   // Ctrl/Cmd + Z 也能撤销
   useEffect(() => {

@@ -53,53 +53,79 @@ export default function Planner({ repo, onSignOut }) {
    * 安卓的返回手势（屏幕边缘左滑）走的是浏览器历史。
    *
    * 这个 app 从来没往历史里压过东西，于是在日视图上左滑一下**直接退出**，
-   * 而人的预期是先回到周视图、再滑一次才走。装成 PWA 之后尤其别扭 ——
-   * 看起来像个 app，返回键却不像 app。
+   * 而人的预期是先回到周视图、再滑一次才走。
    *
-   * 只分两层，够用而且不容易乱：
-   *   周视图 = 底层；日视图 / 设置 / 帮助 / 统计 = 上面那一层。
+   * 只分两层：周视图 = 底层；日视图 / 设置 / 帮助 / 统计 = 上面那一层。
    *
-   *   进上层     -> pushState，返回手势于是有一条可退的
-   *   上层之间换 -> replaceState，不然日视图翻几天历史里就堆了一摞，
-   *                 要按好几次返回才出得去
-   *   回周视图   -> 不自己 setView，交给 history.back()，
-   *                 由 popstate 统一改状态。两条路各改一次的话，
-   *                 历史指针和界面迟早对不上
+   * 关键是**每次视图变化都自检一遍**，而不是只在挂载时搭一次栈。
+   * 上一版就是只在挂载时搭：万一那一下因为时序或设备差异没生效
+   * （冷启动、从桌面图标重新拉起、刷新后浏览器恢复 history.state……），
+   * 之后再也补不回来，返回手势就一直是直接退出。自检的写法哪一次漏了
+   * 下一次就补上。
    */
   const viewRef = useRef(view)
   viewRef.current = view
+  /** history.back() 没退成时的兜底，见下面 */
+  const backTimer = useRef(null)
+
+  useEffect(() => {
+    const deep = view.name !== 'week'
+    const st = window.history.state
+    // idx 是我们自己盖的章：0 = 底层那条，1 = 上层那条。
+    // 光看 pv 的名字判断不了「底下到底还有没有东西」——
+    // 刷新之后浏览器会把 state 原样恢复，于是一条孤零零的历史也可能
+    // 写着 pv:day，照着它走就不补底，返回手势还是直接退出。
+    const idx = typeof st?.idx === 'number' ? st.idx : null
+    // 只有一条历史却盖着「上层」的章：底下其实是空的，得重新垫
+    const orphan = idx !== null && idx > 0 && window.history.length <= 1
+
+    if (idx === null || orphan) {
+      window.history.replaceState({ pv: { name: 'week' }, idx: 0 }, '')
+      if (deep) window.history.pushState({ pv: packView(view), idx: 1 }, '')
+      return
+    }
+    if (!deep) return
+    if (idx === 0) {
+      // 从底层进上层：压一条，返回手势于是有一条可退的
+      window.history.pushState({ pv: packView(view), idx: 1 }, '')
+    } else {
+      // 上层之间换一页（日视图翻天、日视图 -> 设置）。这里要是也 push，
+      // 翻几天历史里就堆一摞，得按好几次返回才出得去
+      window.history.replaceState({ pv: packView(view), idx }, '')
+    }
+  }, [view])
+
+  useEffect(() => {
+    const onPop = (e) => {
+      clearTimeout(backTimer.current)
+      setViewState(unpackView(e.state?.pv))
+    }
+    window.addEventListener('popstate', onPop)
+    return () => {
+      window.removeEventListener('popstate', onPop)
+      clearTimeout(backTimer.current)
+    }
+  }, [])
 
   const setView = useCallback((next) => {
-    const wasDeep = viewRef.current.name !== 'week'
-    const deep = next.name !== 'week'
-    if (!deep) {
-      // 已经在上层：让历史往回走一格，界面由 popstate 改
-      if (wasDeep) {
-        window.history.back()
-        return
-      }
-    } else if (wasDeep) {
-      window.history.replaceState({ pv: packView(next) }, '')
-    } else {
-      window.history.pushState({ pv: packView(next) }, '')
+    if (next.name === 'week' && viewRef.current.name !== 'week') {
+      /**
+       * 回周视图交给 history.back()，界面由 popstate 统一改 ——
+       * 两条路各改一次的话，历史指针和界面迟早对不上。
+       *
+       * 但 back() 不一定退得成（历史里没有可退的），那样 popstate 不会来、
+       * 界面就卡在原地：「‹ 回到周视图」按下去没反应。所以挂个兜底，
+       * popstate 先到就把它清掉。
+       */
+      clearTimeout(backTimer.current)
+      backTimer.current = setTimeout(() => setViewState({ name: 'week' }), 150)
+      window.history.back()
+      return
     }
     setViewState(next)
   }, [])
 
-  useEffect(() => {
-    // 启动时如果直接落在上层（记住了上次的位置），历史里得垫一条周视图，
-    // 不然返回手势第一下就退出了
-    const first = viewRef.current
-    window.history.replaceState({ pv: { name: 'week' } }, '')
-    if (first.name !== 'week') {
-      window.history.pushState({ pv: packView(first) }, '')
-    }
-
-    const onPop = (e) => setViewState(unpackView(e.state?.pv))
-    window.addEventListener('popstate', onPop)
-    return () => window.removeEventListener('popstate', onPop)
-  }, [])
-
+  // 上次停在哪一页，存起来给下次打开用（见 initialView）
   useEffect(() => {
     try {
       if (view.name === 'week') {
@@ -107,7 +133,7 @@ export default function Planner({ repo, onSignOut }) {
       } else if (view.name === 'day') {
         localStorage.setItem(VIEW_KEY, JSON.stringify({ name: 'day', date: dateKey(view.date) }))
       }
-      // 别的页不记，见 initialView
+      // 设置 / 帮助 / 统计不记，见 initialView
     } catch {
       // 存不下就只是这次不记，不影响使用
     }

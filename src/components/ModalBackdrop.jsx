@@ -1,4 +1,5 @@
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
+import { pushModal } from '../lib/modalStack'
 
 /**
  * 弹窗后面那层灰底：点它才关。
@@ -18,6 +19,11 @@ import { useRef } from 'react'
  */
 export default function ModalBackdrop({ onClose, children }) {
   const downOnSelf = useRef(false)
+
+  // 安卓返回手势先关弹窗，不要一下跳回周视图（见 lib/modalStack、Planner）
+  const close = useRef(onClose)
+  close.current = onClose
+  useEffect(() => pushModal(() => close.current()), [])
 
   return (
     <div

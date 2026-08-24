@@ -9,6 +9,7 @@ import { LANGS, tr } from '../lib/i18n'
 import { useLang } from '../state/LangContext'
 import { getHints, setHints, subscribeHints } from '../lib/prefs'
 import { dateKey, fromDateKey, weekStart } from '../lib/dates'
+import { closeTopModal, hasOpenModal } from '../lib/modalStack'
 
 const VIEW_KEY = 'weekly-planner:view'
 
@@ -133,6 +134,23 @@ export default function Planner({ repo, onSignOut }) {
   useEffect(() => {
     const onPop = (e) => {
       clearTimeout(backTimer.current)
+
+      /**
+       * 开着弹窗时，这一下返回先关弹窗。
+       *
+       * 返回是浏览器自己走的，拦不住 —— 等 popstate 到手时那条历史条目
+       * 已经被消耗掉了，所以只能关完弹窗把栈原样补回去（stampBase 会把
+       * 「底层周视图 + 当前这层」重新摆好），下一次返回才照常回周视图。
+       *
+       * 补的这一条不会被 Chrome 标成跳过：弹窗是点出来的，这个页面早就
+       * 拿到过用户交互了（上面 built 那段说的就是这件事）。
+       */
+      if (hasOpenModal()) {
+        closeTopModal()
+        stampBase(viewRef.current)
+        return
+      }
+
       setViewState(unpackView(e.state?.pv))
     }
     window.addEventListener('popstate', onPop)
@@ -140,7 +158,7 @@ export default function Planner({ repo, onSignOut }) {
       window.removeEventListener('popstate', onPop)
       clearTimeout(backTimer.current)
     }
-  }, [])
+  }, [stampBase])
 
   const setView = useCallback((next) => {
     if (next.name === 'week' && viewRef.current.name !== 'week') {

@@ -19,13 +19,34 @@ const VIEW_KEY = 'weekly-planner:view'
  * 这个 app 一天要开好几次，几乎每次都是直接奔当天那一页去的。
  * 每次都从周视图起步，等于每次都多点一下。
  *
- * 两条限制：
+ * 三条限制：
  *   - **只记周视图和日视图。** 设置 / 帮助 / 统计是「去一趟就回来」的地方，
  *     下次打开落在设置页很怪。
  *   - 存的那一天**不在本周就回到今天**。planner 默认装的就是本周，跨周还得
  *     连带把周也挪过去；而隔了一天再打开，想看的本来就是今天，不是昨天。
+ *   - **刷新不算「下次打开」**，回周视图。见下面 isReload。
  */
+
+/**
+ * 这次是刷新（下拉刷新、按刷新），还是重新打开 app？
+ *
+ * 分这一下是为了返回手势。刷新之后落在日视图的话，那条垫底的历史条目
+ * 只能等页面被碰过一次才敢压（Chrome 的 History Manipulation Intervention，
+ * 见下面 built 那段）—— 于是「刷新完立刻左滑」还是会直接退出 app。
+ * 刷新回周视图，这个坑就不存在了：周视图本来就该滑一下走人。
+ *
+ * 从桌面图标打开是 navigate，照旧回到上次那页 —— 那才是「下次打开」。
+ */
+function isReload() {
+  try {
+    return performance.getEntriesByType('navigation')[0]?.type === 'reload'
+  } catch {
+    return false
+  }
+}
+
 function initialView() {
+  if (isReload()) return { name: 'week' }
   try {
     const saved = JSON.parse(localStorage.getItem(VIEW_KEY) || 'null')
     if (saved?.name === 'day' && saved.date) {

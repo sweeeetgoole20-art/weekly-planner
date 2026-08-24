@@ -68,41 +68,67 @@ export default function Planner({ repo, onSignOut }) {
   /** history.back() 没退成时的兜底，见下面 */
   const backTimer = useRef(null)
 
-  /** 这一次加载有没有搭过历史栈。第一次必须无条件搭，见下面。 */
+  /** 这一次加载有没有搭过历史栈。 */
   const built = useRef(false)
 
-  useEffect(() => {
-    const deep = view.name !== 'week'
+  /** 把「底层周视图 + 当前这层」这两条摆好。 */
+  const stampBase = useCallback((v) => {
+    window.history.replaceState({ pv: { name: 'week' }, idx: 0 }, '')
+    if (v.name !== 'week') {
+      window.history.pushState({ pv: packView(v), idx: 1 }, '')
+    }
+  }, [])
 
-    if (!built.current) {
-      built.current = true
-      /**
-       * 每次加载都**无条件**把底垫一遍，不去判断「底下是不是已经有一条了」。
-       *
-       * 判断不出来。history.length 把进 app 之前的条目也算进去，
-       * 而刷新之后浏览器会把 state 原样恢复 —— 一条孤零零的历史照样写着
-       * pv:day。之前两版都栽在这上面：推测「底下有」，于是不补，
-       * 返回手势还是一下退出。
-       *
-       * 代价是刷新之后周视图那一层可能多出一条：在周视图上要按两次返回
-       * 才退出 app。这个方向的错犯得起 —— 反过来（少垫一条）就是
-       * 正编辑着一天，手一滑整个 app 没了。
-       */
-      window.history.replaceState({ pv: { name: 'week' }, idx: 0 }, '')
-      if (deep) window.history.pushState({ pv: packView(view), idx: 1 }, '')
+  useEffect(() => {
+    if (built.current) return
+    built.current = true
+    const v = viewRef.current
+
+    if (v.name === 'week' || navigator.userActivation?.hasBeenActive) {
+      stampBase(v)
       return
     }
 
-    if (!deep) return
+    /**
+     * 页面还没被碰过一下，**这时候不能压历史**。
+     *
+     * Chrome 有个 History Manipulation Intervention：页面在没有用户交互的
+     * 情况下 pushState 塞进去的条目会被标成「跳过」，返回时直接略过 ——
+     * 等于白压。这正好解释了那个怪现象：从周视图点进日视图能退回去
+     * （点击本身就是交互），而刷新之后落在日视图就退不回去（整个加载过程
+     * 一次交互都没有）。
+     *
+     * 所以等第一次触摸再压。在那之前返回手势确实会直接退出，但那种情况是
+     * 「刚打开还什么都没碰就想走」—— 走掉本来也没什么损失。
+     */
+    const arm = () => stampBase(viewRef.current)
+    const opts = { once: true, capture: true }
+    window.addEventListener('pointerdown', arm, opts)
+    window.addEventListener('keydown', arm, opts)
+    return () => {
+      window.removeEventListener('pointerdown', arm, opts)
+      window.removeEventListener('keydown', arm, opts)
+    }
+  }, [stampBase])
+
+  useEffect(() => {
+    // 挂载那一次交给上面的 effect（它要等用户交互），这里只管之后的切换。
+    // 之后的切换都是人点出来的，压历史自带用户交互，不会被 Chrome 跳过
+    if (!built.current) return
+    if (view.name === 'week') return
+
     const idx = window.history.state?.idx
     if (idx === 1) {
       // 上层之间换一页（日视图翻天、日视图 -> 设置）。这里要是也 push，
       // 翻几天历史里就堆一摞，得按好几次返回才出得去
       window.history.replaceState({ pv: packView(view), idx: 1 }, '')
-    } else {
+    } else if (idx === 0) {
       window.history.pushState({ pv: packView(view), idx: 1 }, '')
+    } else {
+      // 不是我们的条目（上面那次还没轮到压）：连底一起摆好
+      stampBase(view)
     }
-  }, [view])
+  }, [view, stampBase])
 
   useEffect(() => {
     const onPop = (e) => {
